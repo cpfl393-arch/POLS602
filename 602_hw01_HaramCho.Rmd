@@ -1,0 +1,270 @@
+---
+title: "Homework 1: When Do Estimates Miss?"
+author: "Ha Ram Cho"
+date: "POLS 602, Fall 2026"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Show code and output for every chunk
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*AI use: I have previously worked in Stata, and this is my first assignment in R. I used Claude as a tutor to work through the statistical concepts and R syntax for this assignment. I ran all of the code and wrote the answers with its feedback.*
+
+```{r seed}
+# Fix the random number generator so results are reproducible
+set.seed(602)
+```
+
+# Problem 1: Why does the sample variance divide by n − 1?
+
+The population is $N(0, 2)$, so the true variance is $\sigma^2 = 4$ and the true standard deviation is $\sigma = 2$.
+
+## (a)
+
+```{r p1a}
+# Function that takes a numeric vector and returns three estimates:
+#   sigma2_n : sum of squared deviations divided by n
+#   s2       : sum of squared deviations divided by n - 1 (sample variance)
+#   s        : square root of s2 (sample standard deviation)
+var_estimators <- function(x) {
+  n  <- length(x)                  # number of observations
+  ss <- sum((x - mean(x))^2)       # sum of squared deviations from the sample mean
+  data.frame(
+    sigma2_n = ss / n,             # divide-by-n version (not built into R)
+    s2       = ss / (n - 1),       # divide-by-(n - 1) version, same as var(x)
+    s        = sqrt(ss / (n - 1))  # same as sd(x)
+  )
+}
+
+# Check the function on a simulated sample of 10 observations from N(0, 2)
+x <- rnorm(10, mean = 0, sd = 2)
+var_estimators(x)
+
+# Compare with R's built-in functions (both should be TRUE)
+all.equal(var_estimators(x)$s2, var(x))
+all.equal(var_estimators(x)$s,  sd(x))
+```
+
+The function's `s2` and `s` match R's `var()` and `sd()`, so the function is computing the estimators correctly.
+
+## (b)
+
+```{r p1b}
+# Draw 1,000 samples of size 5 and apply the function to each.
+# simplify = FALSE keeps the 1,000 one-row data frames as a list.
+sims_list <- replicate(1000,
+                       var_estimators(rnorm(5, mean = 0, sd = 2)),
+                       simplify = FALSE)
+
+# Stack the 1,000 one-row data frames into one data frame (one row per sample)
+sims5 <- do.call(rbind, sims_list)
+head(sims5)
+dim(sims5)
+
+# Mean of each estimator across the 1,000 samples
+colMeans(sims5)
+
+# Plot the sampling distributions of the two variance estimators
+d_n  <- density(sims5$sigma2_n, from = 0)
+d_s2 <- density(sims5$s2, from = 0)
+
+plot(d_s2, col = "darkorange", lwd = 2, xlim = c(0, 20),
+     ylim = c(0, max(d_n$y, d_s2$y)),
+     main = "Variance estimators, n = 5",
+     xlab = "Estimated variance")
+lines(d_n, col = "steelblue", lwd = 2)
+
+# True variance (solid) and the mean of each estimator (dashed)
+abline(v = 4, lwd = 2)
+abline(v = mean(sims5$sigma2_n), col = "steelblue", lty = 2, lwd = 2)
+abline(v = mean(sims5$s2), col = "darkorange", lty = 2, lwd = 2)
+
+legend("topright",
+       c("divide by n", "divide by n - 1 (s^2)", "true variance = 4", "mean of each estimator (dashed)"),
+       col = c("steelblue", "darkorange", "black", "gray40"),
+       lty = c(1, 1, 1, 2), lwd = 2, bty = "n")
+```
+
+Across 1,000 samples of size 5, the mean of the divide-by-*n* estimator is `r round(mean(sims5$sigma2_n), 2)`, while the mean of $s^2$ is `r round(mean(sims5$s2), 2)` (true variance = 4). The divide-by-*n* estimator is biased downward by about `r round(4 - mean(sims5$sigma2_n), 2)`, because deviations measured from the sample mean are systematically smaller than deviations from the true mean: the sample mean is the value that minimizes the sum of squared deviations. Dividing by $n - 1$ corrects for this, so $s^2$ is approximately unbiased.
+
+## (c)
+
+```{r p1c}
+sizes <- c(3, 5, 10, 30, 100)   # sample sizes to compare
+
+# For each sample size, repeat the simulation in (b) 1,000 times
+# and stack the results, with a column recording the sample size
+sims_all <- do.call(rbind, lapply(sizes, function(n) {
+  sims <- do.call(rbind, replicate(1000,
+                                   var_estimators(rnorm(n, mean = 0, sd = 2)),
+                                   simplify = FALSE))
+  sims$n <- n
+  sims
+}))
+dim(sims_all)   # 5 sample sizes x 1,000 samples = 5,000 rows
+
+# Estimated bias = mean of the 1,000 estimates - true variance (4)
+bias_table <- data.frame(
+  n             = sizes,
+  bias_sigma2_n = sapply(sizes, function(k) mean(sims_all$sigma2_n[sims_all$n == k]) - 4),
+  bias_s2       = sapply(sizes, function(k) mean(sims_all$s2[sims_all$n == k]) - 4)
+)
+round(bias_table, 3)
+
+# Plot bias against sample size (log scale on the x-axis)
+plot(bias_table$n, bias_table$bias_sigma2_n, type = "b", pch = 19,
+     col = "steelblue", lwd = 2, log = "x",
+     ylim = range(c(bias_table$bias_sigma2_n, bias_table$bias_s2, 0)),
+     xlab = "Sample size (n, log scale)",
+     ylab = "Estimated bias (mean estimate - 4)",
+     main = "Bias of variance estimators by sample size")
+lines(bias_table$n, bias_table$bias_s2, type = "b", pch = 17,
+      col = "darkorange", lwd = 2)
+abline(h = 0, lty = 2)
+legend("bottomright", c("divide by n", "divide by n - 1 (s^2)"),
+       col = c("steelblue", "darkorange"), pch = c(19, 17), lwd = 2, bty = "n")
+```
+
+The divide-by-*n* estimator is biased downward at every sample size, but the bias shrinks as *n* grows: from about `r round(bias_table$bias_sigma2_n[1], 2)` at *n* = 3 to about `r round(bias_table$bias_sigma2_n[5], 2)` at *n* = 100. This matches the theoretical bias of $-\sigma^2/n = -4/n$ ($-1.33$ at *n* = 3 and $-0.04$ at *n* = 100), so the estimator is asymptotically unbiased. In contrast, the bias of $s^2$ stays close to zero at all sample sizes.
+
+## (d)
+
+```{r p1d}
+# Estimated bias of s = mean of the 1,000 values of s - true SD (2)
+bias_s_table <- data.frame(
+  n      = sizes,
+  mean_s = sapply(sizes, function(k) mean(sims_all$s[sims_all$n == k])),
+  bias_s = sapply(sizes, function(k) mean(sims_all$s[sims_all$n == k]) - 2)
+)
+round(bias_s_table, 3)
+
+# Plot the bias of s against sample size
+plot(bias_s_table$n, bias_s_table$bias_s, type = "b", pch = 19,
+     col = "purple", lwd = 2, log = "x",
+     ylim = range(c(bias_s_table$bias_s, 0)),
+     xlab = "Sample size (n, log scale)",
+     ylab = "Estimated bias of s (mean s - 2)",
+     main = "Bias of the sample standard deviation")
+abline(h = 0, lty = 2)
+```
+
+No. $s$ is biased downward for $\sigma = 2$ at every sample size: the estimated bias is `r round(bias_s_table$bias_s[1], 2)` at *n* = 3, `r round(bias_s_table$bias_s[2], 2)` at *n* = 5, `r round(bias_s_table$bias_s[3], 2)` at *n* = 10, `r round(bias_s_table$bias_s[4], 2)` at *n* = 30, and `r round(bias_s_table$bias_s[5], 2)` at *n* = 100. Although $s^2$ is unbiased for $\sigma^2$, taking the square root does not preserve unbiasedness: the square root pulls large values of $s^2$ down more than it pulls small values, so the average of $s$ falls below 2. Because $s^2$ varies more in small samples, the bias is largest when *n* is small and shrinks toward zero as *n* grows.
+
+## (e)
+
+```{r p1e}
+# Variability of each variance estimator at n = 5 (using the 1,000 estimates from (b))
+sd(sims5$sigma2_n)
+sd(sims5$s2)
+sd(sims5$sigma2_n) / sd(sims5$s2)   # ratio should be exactly 4/5
+```
+
+At *n* = 5, the standard deviation of the divide-by-*n* estimates is `r round(sd(sims5$sigma2_n), 2)`, compared with `r round(sd(sims5$s2), 2)` for $s^2$, so the divide-by-*n* estimator is less variable (exactly 4/5 as variable, since it is $s^2$ multiplied by 4/5). However, lower variability does not make it the better estimator, because its estimates are shrunk toward the wrong value: they cluster around `r round(mean(sims5$sigma2_n), 1)` rather than the true variance of 4. An estimator that always reported 3, regardless of the data, would have zero variability but would always be wrong. A good estimator should be centered on the truth, not just precise.
+
+# Problem 2: Omitted Variable Bias
+
+True data-generating process: $z_i \sim N(0,1)$, $x_i = \rho z_i + \sqrt{1-\rho^2}\,u_i$, $y_i = 1 + 2x_i + 3z_i + \epsilon_i$. The estimand is $\beta_1 = 2$.
+
+## (a)
+
+```{r p2a}
+# Function that generates one dataset from the true DGP for a given n and rho
+make_data <- function(n, rho) {
+  z   <- rnorm(n)                        # political interest ~ N(0, 1)
+  u   <- rnorm(n)                        # other causes of news use ~ N(0, 1)
+  eps <- rnorm(n)                        # error ~ N(0, 1)
+  x   <- rho * z + sqrt(1 - rho^2) * u   # news consumption, correlated with z
+  y   <- 1 + 2 * x + 3 * z + eps         # political knowledge (true beta1 = 2)
+  data.frame(y, x, z)
+}
+
+# One dataset with n = 100 and rho = 0.5
+d100 <- make_data(100, rho = 0.5)
+
+# Check: x and z should have mean ~0 and sd ~1, and cor(x, z) should be ~0.5
+round(c(mean_x = mean(d100$x), sd_x = sd(d100$x),
+        mean_z = mean(d100$z), sd_z = sd(d100$z)), 2)
+round(cor(d100), 2)
+```
+
+The simulated variables have the expected distributions: *x* and *z* have means near 0 and standard deviations near 1, and their correlation is `r round(cor(d100$x, d100$z), 2)`, close to $\rho = 0.5$.
+
+## (b)
+
+```{r p2b}
+# Fit the theorized model (omits z) and the true model (includes z)
+m_short <- lm(y ~ x, data = d100)       # researcher ignores political interest
+m_full  <- lm(y ~ x + z, data = d100)   # true model
+
+coef(m_short)
+coef(m_full)
+confint(m_short)["x", ]                 # 95% CI for the x coefficient
+confint(m_full)["x", ]
+
+# Scatterplot of y against x with the estimated slope for x from each model
+plot(d100$x, d100$y, pch = 19, col = "gray50",
+     xlab = "News consumption (x)", ylab = "Political knowledge (y)",
+     main = "y vs. x (n = 100, rho = 0.5)")
+abline(m_short, col = "red", lwd = 2)
+abline(a = coef(m_full)[1], b = coef(m_full)["x"], col = "blue", lwd = 2)
+legend("topleft", c("y ~ x (omits z)", "y ~ x + z (true model, z = 0)"),
+       col = c("red", "blue"), lwd = 2, bty = "n")
+```
+
+When political interest (*z*) is omitted, the estimated effect of news consumption is `r round(coef(m_short)["x"], 2)` (95% CI: `r round(confint(m_short)["x", 1], 2)` to `r round(confint(m_short)["x", 2], 2)`), which overstates the true effect of 2 by about `r round(coef(m_short)["x"] - 2, 2)`, and the confidence interval does not include 2. When *z* is included, the estimate is `r round(coef(m_full)["x"], 2)` (95% CI: `r round(confint(m_full)["x", 1], 2)` to `r round(confint(m_full)["x", 2], 2)`), close to the true value. The omitted model is biased upward because *z* is positively correlated with *x* ($\rho = 0.5$) and has a positive effect on *y* ($\beta_2 = 3$), so part of *z*'s effect on *y* is attributed to *x*. In the scatterplot, the red line from `y ~ x` is visibly steeper than the blue line from the true model, and the size of the bias is close to the theoretical value of $\beta_2 \times \rho = 3 \times 0.5 = 1.5$.
+
+## (c)
+
+```{r p2c}
+# Same as (a) and (b), but with n = 1,000
+d1000 <- make_data(1000, rho = 0.5)
+round(cor(d1000), 2)
+
+m_short_1000 <- lm(y ~ x, data = d1000)
+m_full_1000  <- lm(y ~ x + z, data = d1000)
+
+coef(m_short_1000)["x"]
+coef(m_full_1000)["x"]
+confint(m_short_1000)["x", ]
+confint(m_full_1000)["x", ]
+
+plot(d1000$x, d1000$y, pch = 19, col = adjustcolor("gray50", 0.4),
+     xlab = "News consumption (x)", ylab = "Political knowledge (y)",
+     main = "y vs. x (n = 1,000, rho = 0.5)")
+abline(m_short_1000, col = "red", lwd = 2)
+abline(a = coef(m_full_1000)[1], b = coef(m_full_1000)["x"], col = "blue", lwd = 2)
+legend("topleft", c("y ~ x (omits z)", "y ~ x + z (true model, z = 0)"),
+       col = c("red", "blue"), lwd = 2, bty = "n")
+```
+
+With 1,000 observations, the estimate from `y ~ x` is `r round(coef(m_short_1000)["x"], 2)` (95% CI: `r round(confint(m_short_1000)["x", 1], 2)` to `r round(confint(m_short_1000)["x", 2], 2)`), essentially the same as with 100 observations. More data did not resolve the bias: the confidence interval became narrower (from a width of about `r round(diff(confint(m_short)["x", ]), 2)` to about `r round(diff(confint(m_short_1000)["x", ]), 2)`), but it is now more tightly concentrated around the wrong value. This is because the omitted variable bias, $\beta_2 \times \rho = 1.5$, does not depend on *n*. The model with *z* still recovers the true effect (`r round(coef(m_full_1000)["x"], 2)`, 95% CI: `r round(confint(m_full_1000)["x", 1], 2)` to `r round(confint(m_full_1000)["x", 2], 2)`).
+
+## (d)
+
+```{r p2d}
+# Same as (c), but with rho = 0 (z is unrelated to x)
+d1000_r0 <- make_data(1000, rho = 0)
+round(cor(d1000_r0), 2)                  # cor(x, z) should be ~0
+
+m_short_r0 <- lm(y ~ x, data = d1000_r0)
+m_full_r0  <- lm(y ~ x + z, data = d1000_r0)
+
+coef(m_short_r0)["x"]
+coef(m_full_r0)["x"]
+confint(m_short_r0)["x", ]
+confint(m_full_r0)["x", ]
+
+plot(d1000_r0$x, d1000_r0$y, pch = 19, col = adjustcolor("gray50", 0.4),
+     xlab = "News consumption (x)", ylab = "Political knowledge (y)",
+     main = "y vs. x (n = 1,000, rho = 0)")
+abline(m_short_r0, col = "red", lwd = 2)
+abline(a = coef(m_full_r0)[1], b = coef(m_full_r0)["x"], col = "blue", lwd = 2)
+legend("topleft", c("y ~ x (omits z)", "y ~ x + z (true model, z = 0)"),
+       col = c("red", "blue"), lwd = 2, bty = "n")
+```
+
+When $\rho = 0$, both models estimate the effect of *x* close to the true value of 2 (`y ~ x`: `r round(coef(m_short_r0)["x"], 2)`; `y ~ x + z`: `r round(coef(m_full_r0)["x"], 2)`), so omitting *z* no longer causes bias. This is because omitted variable bias requires the omitted variable to both affect *y* and be correlated with *x*; here $\beta_2 \times \rho = 3 \times 0 = 0$. However, the confidence interval is wider without *z* (`r round(confint(m_short_r0)["x", 1], 2)` to `r round(confint(m_short_r0)["x", 2], 2)`) than with *z* (`r round(confint(m_full_r0)["x", 1], 2)` to `r round(confint(m_full_r0)["x", 2], 2)`), because without *z*, its effect on *y* is left in the error term, which increases the residual variance and the standard error of the *x* coefficient.
+
+This implies that we should include variables that affect both *x* and *y* (confounders) to avoid bias, and that including strong predictors of *y* improves precision even when they are unrelated to *x*. Because we usually cannot observe whether an omitted variable is correlated with *x*, these choices must be guided by theory, and collecting more data does not fix the bias.
