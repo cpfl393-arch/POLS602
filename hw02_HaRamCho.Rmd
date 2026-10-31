@@ -1,0 +1,204 @@
+---
+title: "Homework 2: Probability and Uncertainty"
+author: "Haram Cho"
+date: "POLS 602, Fall 2026"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Show code and output for every chunk
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+*AI use: I have previously worked in Stata, and R is still new to me. I used Claude as a tutor to work through the statistical concepts and R syntax for this assignment.*
+
+```{r seed}
+# Set the random seed so the simulation results are reproducible
+set.seed(602)
+```
+
+# Problem 1: Simulation
+
+## Setup
+
+The outcome `y` (political knowledge) is a linear function of a treatment `x` (news consumption) and a confounder `z` (political interest). The confounder affects both `x` and `y`. The true effect of `x` on `y` is 2.
+
+```{r p1-setup}
+# Function that simulates one dataset from the true data-generating process
+make_data <- function(n, rho = 0.5) {
+  z   <- rnorm(n)                          # confounder: political interest ~ N(0, 1)
+  u   <- rnorm(n)                          # other causes of x, unrelated to z
+  eps <- rnorm(n)                          # error term ~ N(0, 1)
+  x   <- rho * z + sqrt(1 - rho^2) * u     # treatment: mix of z and u, so cor(x, z) = rho and Var(x) = 1
+  y   <- 1 + 2 * x + 3 * z + eps           # outcome: true effect of x = 2, effect of z = 3
+  data.frame(y, x, z)                      # return the three variables as a data frame
+}
+
+d <- make_data(200)                        # simulate one dataset with 200 observations
+m_true <- lm(y ~ x + z, data = d)          # fit the true model (includes the confounder)
+summary(m_true)                            # print the summary table
+```
+
+In the true model, the estimated coefficient on x is `r round(coef(m_true)["x"], 2)` (SE = `r round(summary(m_true)$coefficients["x", "Std. Error"], 3)`), close to the true value of 2. The estimates for the intercept (`r round(coef(m_true)[1], 2)`) and z (`r round(coef(m_true)["z"], 2)`) are also close to their true values of 1 and 3.
+
+## (a)
+
+```{r p1a}
+# Repeat 1,000 times: simulate a new dataset, fit the true model, keep the coefficient on x
+beta_true <- replicate(1000, coef(lm(y ~ x + z, data = make_data(200)))["x"])
+
+mean(beta_true)                            # center of the sampling distribution
+sd(beta_true)                              # spread of the sampling distribution
+
+# Histogram of the 1,000 estimates, with a normal curve that has the same mean and sd
+hist(beta_true, breaks = 40, freq = FALSE,
+     main = "Sampling distribution of the treatment coefficient (true model)",
+     xlab = "Estimated coefficient on x")
+curve(dnorm(x, mean = mean(beta_true), sd = sd(beta_true)),
+      add = TRUE, col = "red", lwd = 2)    # normal curve for comparison
+abline(v = 2, lty = 2)                     # dashed line at the true value
+
+# Q-Q plot: if the distribution is normal, the points fall on the line
+qqnorm(beta_true)
+qqline(beta_true, col = "red")
+```
+
+I simulated 1,000 new datasets and fit the true model to each one. The average of the 1,000 estimates for x is `r round(mean(beta_true), 3)`, which is very close to the true value of 2. Their standard deviation is `r round(sd(beta_true), 3)`.
+
+The histogram has a bell shape and matches the red normal curve. In the Q-Q plot, the points fall on the straight line. So the sampling distribution of the coefficient is approximately normal, as the central limit theorem says.
+
+## (b)
+
+```{r p1b}
+# Bootstrap: resample the rows of d with replacement (same n), refit the true
+# model, and keep the coefficient on x; repeat 1,000 times
+beta_boot <- replicate(1000, {
+  rows <- sample(1:nrow(d), size = nrow(d), replace = TRUE)   # pick 200 row numbers, with replacement
+  coef(lm(y ~ x + z, data = d[rows, ]))["x"]                   # fit on the resampled rows; keep x
+})
+
+sd(beta_boot)                                    # bootstrapped standard error
+summary(m_true)$coefficients["x", "Std. Error"]  # standard error from lm(), for comparison
+quantile(beta_boot, c(0.025, 0.975))             # 95% bootstrap confidence interval
+```
+
+I resampled the rows of my one dataset 1,000 times, with replacement, and fit the true model each time. The standard deviation of these 1,000 estimates is the bootstrapped standard error: `r round(sd(beta_boot), 3)`.
+
+This is almost the same as the standard error from `lm()` (`r round(summary(m_true)$coefficients["x", "Std. Error"], 3)`). The 95% bootstrap interval is `r round(quantile(beta_boot, 0.025), 2)` to `r round(quantile(beta_boot, 0.975), 2)`, and it includes the true value of 2. So the bootstrap gives the same answer as the formula, using only the one dataset we have.
+
+## (c)
+
+```{r p1c}
+# (c) Same as (a), but with a model that omits the confounder z
+# Repeat 1,000 times: simulate a new dataset, fit y ~ x only, keep the coefficient on x
+beta_short <- replicate(1000, coef(lm(y ~ x, data = make_data(200)))["x"])
+
+mean(beta_short)                           # center of the sampling distribution
+sd(beta_short)                             # spread of the sampling distribution
+
+# Histogram with a normal curve, the true value (dashed), and the mean (solid blue)
+hist(beta_short, breaks = 40, freq = FALSE, xlim = c(1.5, 4.2),
+     main = "Sampling distribution of the treatment coefficient (z omitted)",
+     xlab = "Estimated coefficient on x")
+curve(dnorm(x, mean = mean(beta_short), sd = sd(beta_short)),
+      add = TRUE, col = "red", lwd = 2)    # normal curve for comparison
+abline(v = 2, lty = 2)                     # true value
+abline(v = mean(beta_short), col = "blue", lwd = 2)   # where the estimates actually center
+
+# Q-Q plot: check whether the distribution is still normal
+qqnorm(beta_short)
+qqline(beta_short, col = "red")
+
+# How often does the 95% confidence interval from y ~ x contain the true value 2?
+ci_short <- t(replicate(1000, confint(lm(y ~ x, data = make_data(200)))["x", ]))
+mean(ci_short[, 1] <= 2 & ci_short[, 2] >= 2)   # share of intervals that contain 2
+```
+When I leave out the confounder z, the estimates for x center around `r round(mean(beta_short), 2)`, not 2. So the model overestimates the effect of x by about `r round(mean(beta_short) - 2, 2)`. This matches the formula: 3 × 0.5 = 1.5.
+
+The estimates are also more spread out. Their standard deviation is `r round(sd(beta_short), 3)`, more than twice as large as in the true model. This is because the effect of z is now part of the error.
+
+The histogram still has a bell shape, and the Q-Q plot is still a straight line. So the sampling distribution is still normal. But it is in the wrong place. The true value, 2, is far away from all the estimates. None of the 95% confidence intervals (`r round(100 * mean(ci_short[, 1] <= 2 & ci_short[, 2] >= 2), 1)`%) include 2.
+
+This shows that a normal sampling distribution does not mean the estimate is correct. Tests like t-tests, p-values, and confidence intervals only deal with random error. They cannot tell us if the model is biased. If we leave out a confounder, the results can look significant and precise but still be wrong.
+
+# Problem 2: Data Analysis
+I use the 2021 By-election Voter Survey conducted by the Institute for Local Autonomy and Decentralization at Pukyong National University and the Korean Association of Electoral Studies. The survey was fielded after the April 2021 Seoul and Busan mayoral by-elections. I restrict the sample to the 1,842 respondents who voted for the Democratic Party of Korea (DP) candidate in the 2018 local elections. The data file is not posted in this repository.
+
+- `defect` = 1 if the respondent did not vote for the DP candidate in 2021 (including abstention), 0 otherwise.
+- `oppose` = 1 if the respondent opposed (4) or strongly opposed (5) the DP's decision to nominate a candidate for the by-election (q14), 0 otherwise.
+
+## (a)
+
+```{r p2a}
+library(haven)                                   # package for reading Stata .dta files
+
+sb <- read_dta("sb2021.dta")                     # load the survey data
+
+dp18 <- subset(sb, q63_1 == 1)                   # keep only respondents who voted for the DP candidate in the 2018 local election
+nrow(dp18)                                       # check sample size (should be 1,842)
+
+table(dp18$q14, useNA = "ifany")                 # check responses on DP renomination (look for don't-know / missing codes)
+
+# defect = did NOT vote for the DP candidate in 2021 (Seoul: Park Young-sun, Busan: Kim Young-choon); abstainers count as defectors
+dp18$defect <- ifelse(dp18$q5_1 %in% 1 | dp18$q5_2 %in% 1, 0, 1)
+
+# oppose = q14 is 4 (oppose) or 5 (strongly oppose)
+dp18$oppose <- ifelse(dp18$q14 >= 4, 1, 0)
+
+tapply(dp18$defect, dp18$oppose, mean)           # defection rate by group
+
+t.test(defect ~ oppose, data = dp18, alternative = "less")   # one-sided Welch t-test
+```
+I test H3 from my research design: among voters who supported the Democratic party(South Korea / DP)’s mayoral candidate in 2018, those who opposed the DP’s decision to nominate a candidate in the 2021 by-election were more likely to defect.
+
+- H₀: The defection rate of those who opposed the nomination is equal to (or lower than) that of those who did not oppose it.
+- H₁: The defection rate is higher among those who opposed the nomination.
+
+I use a one-sided test because H3 predicts a direction before looking at the data. I use a Welch t-test, not a z-test, because I do not know the population variance and must estimate it from the sample. The two groups also have different variances, so I use Welch’s version. With large samples (493 and 1,349), the t and z tests give almost the same result. I set α = 0.05.
+
+The defection rate is 39.2% among those who did not oppose the nomination and 75.1% among those who opposed it, a difference of about 36 percentage points. The t statistic is −15.18 (negative because R subtracts group 1 from group 0), and the p-value is smaller than 2.2 × 10⁻¹⁶.
+
+Statistically, p < 0.05, so I reject the null hypothesis. Substantively, voters who opposed the nomination were almost twice as likely to defect. This supports H3. However, this is a simple two-group comparison. People who opposed the nomination may have already been less attached to the DP, for example because of their partisanship or their evaluation of President Moon. So this difference should not be read as a causal effect.
+
+## (b)
+
+```{r p2b}
+m_p2 <- lm(defect ~ oppose, data = dp18)   # regress defection on opposition to the nomination
+summary(m_p2)                               # print coefficient, SE, t value, p-value
+```
+I regress defection (1 = did not vote for the DP candidate in 2021) on opposition to the DP’s nomination (1 = opposed). Because the outcome is 0/1, this is a linear probability model.
+
+The intercept (0.392) is the predicted defection rate for voters who did not oppose the nomination, and it is the same as the group mean in (a). The coefficient on oppose is 0.358: opposing the nomination is associated with a 35.8 percentage-point higher probability of defecting. This is exactly the difference in means from (a). A regression on a single dummy variable is another way to compare two group means.
+
+The standard error is 0.025, so the t value is 0.358 / 0.025 = 14.36. The p-value is smaller than 2 × 10⁻¹⁶, so I reject the null hypothesis at α = 0.05.
+
+The t value is slightly smaller than in (a) (14.36 vs. 15.18) because lm() assumes that both groups have the same variance, while the Welch test does not. Also, lm() reports a two-sided p-value. The one-sided p-value is half of it, but both are essentially zero, so the conclusion is the same.
+
+## (c)
+
+```{r p2c}
+# observed difference in defection rates (oppose - not oppose)
+obs_diff <- mean(dp18$defect[dp18$oppose == 1]) - mean(dp18$defect[dp18$oppose == 0])
+obs_diff
+
+# shuffle the oppose labels 1,000 times and recompute the difference each time
+perm_diff <- replicate(1000, {
+  shuffled <- sample(dp18$oppose)                                   # randomly reorder the oppose labels (no replacement)
+  mean(dp18$defect[shuffled == 1]) - mean(dp18$defect[shuffled == 0])  # difference under the null
+})
+
+# plot the null distribution and the observed difference
+hist(perm_diff, breaks = 40,
+     xlim = c(min(perm_diff), obs_diff + 0.02),                     # widen the x-axis so the observed value is visible
+     main = "Permutation null distribution of the difference in means",
+     xlab = "Difference in defection rate (oppose - not oppose)")
+abline(v = obs_diff, col = "red", lwd = 2)                          # red line = observed difference
+
+# one-sided permutation p-value: share of shuffled differences at least as large as the observed one
+mean(perm_diff >= obs_diff)
+```
+To run a permutation test, I randomly shuffled the oppose labels 1,000 times while keeping the defect values fixed. Shuffling breaks any link between opposing the nomination and defecting, so each shuffled difference shows what the gap would look like if the null hypothesis were true.
+
+The histogram shows that the shuffled differences are centered around 0 and mostly fall between about −0.07 and 0.1. The observed difference (0.358, red line) lies far to the right of the whole distribution. None of the 1,000 shuffled differences was as large as the observed one, so the one-sided permutation p-value is less than 1/1,000 = 0.001. (It is not exactly zero; we would need more shuffles to estimate it more precisely.)
+
+All three methods lead to the same conclusion. The t-test in (a) and the regression in (b) give p-values smaller than 2 × 10⁻¹⁶, and the permutation test gives p < 0.001. The p-values in (a) and (b) can be that small because they come from a formula (the t distribution), while the permutation p-value is limited by the number of shuffles. The permutation test does not assume a normal distribution or equal variances. It gives the same answer as (a) and (b), so the result does not depend on those assumptions. This is reassuring because the outcome is a 0/1 variable, not a normally distributed one.
